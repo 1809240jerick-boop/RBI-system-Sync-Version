@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RBI System | SEC JERICK</title>
+
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #eef1f5; margin: 0; padding: 0; }
+
+        .app {
+            max-width: 380px; 
+            margin: 0 auto;
+            background: #ffffff;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+
+        header {
+            background: #0a3d62;
+            color: #ffffff;
+            padding: 16px;
+            text-align: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .section { padding: 16px; border-bottom: 8px solid #f0f2f5; }
+        
+        /* Dashboard Stats */
+        .stats { display: flex; justify-content: space-around; background: #f8f9fa; padding: 10px; font-size: 12px; font-weight: bold; }
+        .stats span { color: #0a3d62; }
+
+        .form-group { margin-bottom: 12px; }
+        label { display: block; font-size: 12px; font-weight: 600; color: #444; margin-bottom: 4px; }
+        
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-size: 14px;
+            outline: none;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-save { background: #1e90ff; color: white; }
+        .btn-sync { background: #f1c40f; color: #333; }
+        .btn-excel { background: #27ae60; color: white; }
+
+        /* SCROLLABLE VIEWER (Fixed to 4 names) */
+        .list { 
+            margin-top: 10px; 
+            max-height: 275px; 
+            overflow-y: auto; 
+            border: 2px solid #0a3d62;
+            border-radius: 8px;
+            background: #fff;
+        }
+
+        .record-item { border-bottom: 1px solid #eee; }
+        .record-header {
+            padding: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .record-name { font-weight: 600; color: #0a3d62; font-size: 13px; text-transform: uppercase; }
+        .record-sub { font-size: 11px; color: #888; }
+
+        .record-details {
+            display: none;
+            padding: 12px;
+            background: #f1f4f7;
+            font-size: 12px;
+            border-top: 1px solid #ddd;
+        }
+
+        .error-log { color: red; font-size: 10px; padding: 10px; text-align: center; }
+        footer { text-align: center; padding: 20px; font-size: 11px; color: #999; }
+    </style>
+</head>
+<body>
+
+<div class="app">
+    <header>
+        <h3>RBI System</h3>
+        <small>Barangay Inhabitant Registration</small>
+    </header>
+
+    <div class="stats">
+        <div>Total: <span id="stat-total">0</span></div>
+        <div>Migrants: <span id="stat-mig">0</span></div>
+    </div>
+
+    <div class="section" id="sync-box">
+        <div id="auth-status" style="font-size:11px; text-align:center; margin-bottom:8px;">Cloud Backup: Offline</div>
+        <div id="g_id_onload"
+             data-client_id="YOUR_CLIENT_ID_HERE.apps.googleusercontent.com"
+             data-callback="handleCredentialResponse">
+        </div>
+        <div class="g_id_signin" data-type="standard" data-width="340"></div>
+        <div id="error-display" class="error-log"></div>
+    </div>
+
+    <div class="section">
+        <div class="form-group">
+            <label>Inhabitant Type</label>
+            <select id="type"><option>NON-MIGRANT</option><option>MIGRANT</option><option>TRANSIENT</option></select>
+        </div>
+        <div class="form-group"><label>Last Name</label><input id="ln" placeholder="Required"></div>
+        <div class="form-group"><label>First Name</label><input id="fn" placeholder="Required"></div>
+        <div class="form-group"><label>Birthday</label><input type="date" id="dob"></div>
+        <button class="btn-save" onclick="saveRecord()">SAVE RECORD</button>
+    </div>
+
+    <div class="section">
+        <label>Search (First or Last Name)</label>
+        <input id="searchBox" oninput="renderList()" placeholder="Start typing...">
+        <div class="list" id="resultList"></div>
+    </div>
+
+    <div class="section">
+        <button class="btn-sync" id="syncBtn" style="display:none;" onclick="syncToDrive()">⬆️ Sync to Google Drive</button>
+        <button class="btn-excel" onclick="exportExcel()">Export to Excel</button>
+    </div>
+
+    <footer>© SEC JERICK™</footer>
+</div>
+
+<script>
+    // --- APP SETUP ---
+    let records = JSON.parse(localStorage.getItem('rbiRecords')) || [];
+    let token = null;
+
+    // --- GOOGLE AUTH ---
+    function handleCredentialResponse(response) {
+        // Triggered after Google Login
+        const client = google.accounts.oauth2.initTokenClient({
+            client_id: "YOUR_CLIENT_ID_HERE.apps.googleusercontent.com",
+            scope: "https://www.googleapis.com/auth/drive.file",
+            callback: (res) => {
+                if (res.error) {
+                    document.getElementById('error-display').innerText = "Auth Error: " + res.error;
+                    return;
+                }
+                token = res.access_token;
+                document.getElementById('auth-status').innerText = "✅ Cloud: Ready to Sync";
+                document.getElementById('syncBtn').style.display = "flex";
+            }
+        });
+        client.requestAccessToken();
+    }
+
+    // --- CLOUD SYNC ---
+    async function syncToDrive() {
+        if (!token) return alert("Please Login First");
+        
+        try {
+            const fileName = "RBI_BACKUP.json";
+            const content = JSON.stringify(records);
+
+            // 1. Search for existing file
+            const search = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${fileName}'`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            }).then(r => r.json());
+
+            let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=media';
+            let method = 'POST';
+
+            if (search.files && search.files.length > 0) {
+                url = `https://www.googleapis.com/upload/drive/v3/files/${search.files[0].id}?uploadType=media`;
+                method = 'PATCH';
+            }
+
+            // 2. Upload
+            const res = await fetch(url, {
+                method: method,
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: content
+            });
+
+            if (res.ok) alert("Cloud Sync Complete!");
+            else alert("Sync Error. Check your Client ID origins.");
+        } catch (e) {
+            alert("Network Error during Sync.");
+        }
+    }
+
+    // --- CORE LOGIC ---
+    function saveRecord() {
+        const lName = document.getElementById('ln').value.trim();
+        const fName = document.getElementById('fn').value.trim();
+        if (!lName || !fName) return alert("Names are required!");
+
+        const data = [
+            document.getElementById('type').value,
+            lName.toUpperCase(),
+            fName.toUpperCase(),
+            document.getElementById('dob').value
+        ];
+        
+        records.push(data);
+        localStorage.setItem('rbiRecords', JSON.stringify(records));
+        renderList();
+        document.getElementById('ln').value = '';
+        document.getElementById('fn').value = '';
+        alert("Saved locally!");
+    }
+
+    function renderList() {
+        const q = document.getElementById('searchBox').value.toLowerCase();
+        const list = document.getElementById('resultList');
+        list.innerHTML = '';
+
+        records.forEach((r, i) => {
+            // DUAL SEARCH: Last Name (r[1]) or First Name (r[2])
+            if (r[1].toLowerCase().includes(q) || r[2].toLowerCase().includes(q)) {
+                const div = document.createElement('div');
+                div.className = 'record-item';
+                div.innerHTML = `
+                    <div class="record-header" onclick="toggle(${i})">
+                        <div>
+                            <div class="record-name">${r[1]}, ${r[2]}</div>
+                            <div class="record-sub">${r[0]} | DOB: ${r[3]}</div>
+                        </div>
+                        <span id="ico-${i}">▼</span>
+                    </div>
+                    <div class="record-details" id="det-${i}">
+                        <button style="background:red; color:white; width:auto; padding:5px; font-size:10px;" onclick="del(${i})">Delete</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            }
+        });
+        updateStats();
+    }
+
+    function toggle(i) {
+        const det = document.getElementById(`det-${i}`);
+        const open = det.style.display === 'block';
+        document.querySelectorAll('.record-details').forEach(d => d.style.display = 'none');
+        det.style.display = open ? 'none' : 'block';
+    }
+
+    function del(i) {
+        if (confirm("Delete this record?")) {
+            records.splice(i, 1);
+            localStorage.setItem('rbiRecords', JSON.stringify(records));
+            renderList();
+        }
+    }
+
+    function updateStats() {
+        document.getElementById('stat-total').innerText = records.length;
+        document.getElementById('stat-mig').innerText = records.filter(r => r[0] === 'MIGRANT').length;
+    }
+
+    function exportExcel() {
+        const ws = XLSX.utils.aoa_to_sheet([["TYPE", "LAST NAME", "FIRST NAME", "DOB"], ...records]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "RBI_Data");
+        XLSX.writeFile(wb, "RBI_Export.xlsx");
+    }
+
+    renderList();
+</script>
+</body>
+</html>
